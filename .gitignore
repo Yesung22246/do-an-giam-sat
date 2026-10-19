@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.db
+.env
+.pytest_cache/
+
+# Node (khi TV3/TV5 thêm vào)
+node_modules/
+
+# Hệ điều hành / editor
+.DS_Store
+.vscode/
+.idea/
