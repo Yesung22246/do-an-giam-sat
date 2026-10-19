@@ -14,8 +14,8 @@ mình + các mục mình phụ thuộc, không cần đọc hết.
 | Bạn là | Nhiệm vụ 1 câu | ĐỌC mục | PHẢI NỘP (output) |
 |--------|----------------|---------|-------------------|
 | **TV1 — Đức Hoàng** (lõi giám sát) | Kiểm tra web/máy chủ + sinh cảnh báo | §A schema, §C cảnh báo | Service `monitoring-core` ghi dữ liệu vào DB + bắn cảnh báo |
-| **TV2 — Trương Nguyễn Công Hoàng** (Backend API) | Viết API + quản lý user/gói | §A schema, §B API | API chạy đúng §B, đúng bảng §A |
-| **TV3 — Trương Công Hoàng** (Frontend) | Giao diện dashboard | §B API | Web gọi API §B, hiển thị uptime/biểu đồ/sự cố |
+| **TV2 — Trương Công Hoàng** (Backend API) | Viết API + quản lý user/gói | §A schema, §B API | API chạy đúng §B, đúng bảng §A |
+| **TV3 — Trương Nguyễn Công Hoàng** (Frontend) | Giao diện dashboard | §B API | Web gọi API §B, hiển thị uptime/biểu đồ/sự cố |
 | **TV4 — Huy** (Hạ tầng) | Docker + triển khai đa máy chủ | §D hạ tầng | docker-compose chạy cả hệ thống + Postgres chung |
 | **TV5 — Nguyễn Hoàng** (Telegram) | Bot gửi/nhận cảnh báo | §C cảnh báo | Endpoint nhận JSON §C + gửi Telegram |
 
@@ -27,7 +27,7 @@ sao cũng được.
 
 ## §A. Schema database 🔒 KHÓA CỨNG
 
-**Chủ sở hữu: TV2 — Trương Nguyễn Công Hoàng** (tạo và quản lý file migration). TV1 chỉ GHI vào
+**Chủ sở hữu: TV2 — Trương Công Hoàng** (tạo và quản lý file migration). TV1 chỉ GHI vào
 `check_results` + `incidents`. Dùng chung 1 Postgres do TV4 dựng.
 
 Dùng lại đúng các bảng này (TV1 đã hiện thực sẵn 3 bảng cuối trong
@@ -94,7 +94,7 @@ notification_channels      -- nơi khách muốn nhận cảnh báo (TV5 dùng)
 
 ## §B. API 🔒 KHÓA CỨNG
 
-**Chủ sở hữu: TV2 (Trương Nguyễn Công Hoàng) viết · TV3 (Trương Công Hoàng) gọi.** Mọi response là JSON. Mọi route (trừ
+**Chủ sở hữu: TV2 (Trương Công Hoàng) viết · TV3 (Trương Nguyễn Công Hoàng) gọi.** Mọi response là JSON. Mọi route (trừ
 `/auth/*` và `/status/*`) cần header `Authorization: Bearer <JWT>`.
 
 ```
@@ -200,7 +200,7 @@ telegram-bot     8080          phần TV5, nhận cảnh báo ở POST /alerts
 - ✅ **TV1 — Đức Hoàng (lõi giám sát)**: xong bản chạy được — 3 loại kiểm tra,
   alert engine chống spam, lưu DB, tính uptime, đã test. Nằm ở `monitoring-core/`
   (xem `monitoring-core/README.md`).
-- ⬜ **TV2 — Trương Nguyễn Công Hoàng** (Backend API): bắt đầu từ §A + §B.
-- ⬜ **TV3 — Trương Công Hoàng** (Frontend): bắt đầu từ §B.
+- ⬜ **TV2 — Trương Công Hoàng** (Backend API): bắt đầu từ §A + §B.
+- ⬜ **TV3 — Trương Nguyễn Công Hoàng** (Frontend): bắt đầu từ §B.
 - ⬜ **TV4 — Huy** (Hạ tầng): bắt đầu từ §D.
 - ⬜ **TV5 — Nguyễn Hoàng** (Telegram): bắt đầu từ §C.

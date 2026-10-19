@@ -1,4 +1,4 @@
-# Gửi riêng: TV2 — Trương Nguyễn Công Hoàng (Backend API)
+# Gửi riêng: TV2 — Trương Công Hoàng (Backend API)
 
 > Đây là phần của ông. Đọc file này là đủ, không cần đọc hết file chung.
 > Phần ông là **xương sống dữ liệu** — TV1/TV3/TV5 đều phụ thuộc ông, nên ông

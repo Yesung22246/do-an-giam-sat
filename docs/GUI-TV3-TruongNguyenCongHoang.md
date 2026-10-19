@@ -1,4 +1,4 @@
-# Gửi riêng: TV3 — Trương Công Hoàng (Frontend Dashboard)
+# Gửi riêng: TV3 — Trương Nguyễn Công Hoàng (Frontend Dashboard)
 
 > Đây là phần của ông. Đọc file này là đủ.
 > Tin vui: ông **không phải chờ ai** — cứ dùng dữ liệu giả đúng format bên dưới
