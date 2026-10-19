@@ -19,6 +19,12 @@ máy trạng thái (state machine) cho từng mục tiêu.
 - **Ghi lịch sử sự cố** (bảng `incidents`) — nguồn dữ liệu "lịch sử sự cố".
 - **Lưu trạng thái alert xuống DB** (bảng `monitor_alert_states`) — restart/deploy
   lại service KHÔNG bị mất trạng thái, không báo trùng "SẬP".
+- **Ngưỡng cảnh báo riêng từng monitor** — mỗi monitor dùng `retries`/`ssl_warn_days`
+  của riêng nó, chạy song song không đạp nhau.
+- **Gom dữ liệu dài hạn (rollup)** (bảng `check_rollups`) — dữ liệu cũ gom theo giờ
+  để biểu đồ 30 ngày không làm phình DB; uptime vẫn tính đúng.
+- **Multi-region probe** — kiểm tra từ nhiều khu vực, phân biệt "web sập thật"
+  (mọi nơi đều lỗi) với "lỗi đường mạng" (chỉ vài nơi lỗi) để không báo nhầm.
 - **Notifier tách rời** — phát sự kiện cảnh báo ra ngoài cho TV5 (Telegram) qua JSON chuẩn.
 
 ## Cài & chạy
@@ -44,6 +50,12 @@ Xem Alert Engine hoạt động mà không cần mạng (dùng để trình bày
 
 ```bash
 python demo_alert_engine.py
+```
+
+Xem multi-region phân biệt "sập thật" vs "lỗi đường mạng" (không cần mạng):
+
+```bash
+python demo_multi_region.py
 ```
 
 Chạy test:

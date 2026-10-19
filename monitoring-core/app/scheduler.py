@@ -38,12 +38,17 @@ class MonitorScheduler:
         notifier: Notifier,
         max_concurrent: int = 50,
         policy: AlertPolicy | None = None,
+        rollup_interval_seconds: int = 3600,
+        raw_retention_hours: int = 48,
     ) -> None:
         self.notifier = notifier
         self.engine = AlertEngine(policy=policy)
         self._sem = asyncio.Semaphore(max_concurrent)
         self._tasks: list[asyncio.Task] = []
         self._stop = asyncio.Event()
+        # Gom dữ liệu cũ định kỳ để DB không phình (mặc định mỗi giờ).
+        self.rollup_interval_seconds = rollup_interval_seconds
+        self.raw_retention_hours = raw_retention_hours
 
     async def run_forever(self) -> None:
         """Nạp danh sách monitor rồi chạy mỗi cái một vòng lặp cho tới khi dừng."""
@@ -61,6 +66,7 @@ class MonitorScheduler:
             asyncio.create_task(self._monitor_loop(m.id, m.interval_seconds))
             for m in monitors
         ]
+        self._tasks.append(asyncio.create_task(self._rollup_loop()))
         try:
             await self._stop.wait()
         finally:
@@ -81,6 +87,27 @@ class MonitorScheduler:
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
             except asyncio.TimeoutError:
                 pass  # hết interval -> kiểm tra tiếp
+
+    async def _rollup_loop(self) -> None:
+        """Định kỳ gom dữ liệu kiểm tra cũ thành rollup theo giờ."""
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), timeout=self.rollup_interval_seconds
+                )
+            except asyncio.TimeoutError:
+                pass
+            if self._stop.is_set():
+                break
+            try:
+                async with SessionLocal() as session:
+                    moved = await rollup_hourly(
+                        session, raw_retention_hours=self.raw_retention_hours
+                    )
+                if moved:
+                    print(f"[rollup] Đã gom {moved} dòng dữ liệu cũ.")
+            except Exception as exc:
+                print(f"[rollup] Lỗi khi gom dữ liệu: {exc}")
 
     async def check_once(self, monitor_id: int) -> list[AlertEvent]:
         """Thực hiện đúng 1 lần kiểm tra cho 1 monitor (dùng lại được trong demo/test)."""

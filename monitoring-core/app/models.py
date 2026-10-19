@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -117,6 +118,39 @@ class Incident(Base):
     severity: Mapped[str] = mapped_column(String(20), default="critical")
 
     monitor: Mapped["Monitor"] = relationship(back_populates="incidents")
+
+
+class CheckRollup(Base):
+    """Dữ liệu kiểm tra được GOM lại theo từng giờ (data rollup).
+
+    Vấn đề: mỗi lần kiểm tra ghi 1 dòng vào check_results. Monitor chu kỳ 30s
+    thì 1 ngày ~2880 dòng, 30 ngày ~86k dòng/monitor -> vẽ biểu đồ 30 ngày
+    phải quét cả trăm nghìn dòng, DB phình to.
+
+    Giải pháp: giữ dữ liệu thô (check_results) vài chục giờ gần nhất cho chi tiết,
+    phần cũ hơn gom thành 1 dòng/giờ ở đây (tổng số lần, số UP, min/max/avg phản
+    hồi). Biểu đồ dài ngày đọc bảng này -> nhẹ và nhanh.
+
+    Mỗi (monitor, giờ) đúng 1 dòng.
+    """
+    __tablename__ = "check_rollups"
+    __table_args__ = (
+        UniqueConstraint("monitor_id", "bucket_start", name="uq_rollup_monitor_hour"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    monitor_id: Mapped[int] = mapped_column(ForeignKey("monitors.id"))
+    # Đầu khung giờ (UTC, đã cắt phút/giây về 0).
+    bucket_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    total_checks: Mapped[int] = mapped_column(Integer, default=0)
+    up_checks: Mapped[int] = mapped_column(Integer, default=0)
+    down_checks: Mapped[int] = mapped_column(Integer, default=0)
+    uptime_percent: Mapped[float] = mapped_column(Float, default=100.0)
+    avg_response_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    min_response_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_response_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class MonitorAlertState(Base):
