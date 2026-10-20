@@ -11,16 +11,19 @@ from app.auth import (
     create_access_token,
     get_current_user,
     hash_password,
-     verify_password,
+    verify_password,
 )
 from app.database import AsyncSessionLocal, Base, engine, get_db
 from app.models import (
     CheckResult,
+    CheckRollup,
+    CheckStatus,
     Incident,
     Monitor,
     NotificationChannel,
     Plan,
     User,
+    utcnow,
 )
 from app.schemas import (
     AuthRequest,
@@ -70,11 +73,9 @@ async def seed_initial_data(db: AsyncSession) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Tạo đầy đủ 7 bảng trong Postgres nếu chưa có
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Seed dữ liệu gói dịch vụ & tài khoản admin
     async with AsyncSessionLocal() as session:
         await seed_initial_data(session)
 
@@ -89,7 +90,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Bật CORS cho phép Frontend (TV3) gọi từ mọi origin
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -120,35 +120,76 @@ async def get_owned_monitor_or_404(
     return monitor
 
 
+# ==================== HÀM COMPUTE_UPTIME (ĐỒNG BỘ 100% VỚI TV1) ====================
 async def calculate_monitor_uptime(
     monitor_id: int,
-    hours: int,
-    db: AsyncSession,
+    window_hours: int,
+    session: AsyncSession,
+    now: Optional[datetime] = None,
 ) -> UptimeOut:
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
-    result = await db.execute(
-        select(CheckResult).where(
+    """
+    Bê nguyên thuật toán compute_uptime từ monitoring-core/app/uptime.py của TV1:
+    Cộng dồn từ cả check_results (dữ liệu thô gần đây) và check_rollups (dữ liệu
+    đã gom theo giờ) để kết quả đúng kể cả với cửa sổ dài (vd 30 ngày).
+    """
+    since = (now or utcnow()) - timedelta(hours=window_hours)
+
+    # --- Nguồn 1: dữ liệu thô gần đây ---
+    raw_total = await session.scalar(
+        select(func.count(CheckResult.id)).where(
             CheckResult.monitor_id == monitor_id,
             CheckResult.checked_at >= since,
         )
-    )
-    rows = result.scalars().all()
-    total_checks = len(rows)
-    if total_checks == 0:
-        return UptimeOut(uptime_percent=100.0, avg_response_ms=None, total_checks=0)
+    ) or 0
+    raw_up = await session.scalar(
+        select(func.count(CheckResult.id)).where(
+            CheckResult.monitor_id == monitor_id,
+            CheckResult.checked_at >= since,
+            CheckResult.status == CheckStatus.UP,
+        )
+    ) or 0
+    raw_resp_sum = await session.scalar(
+        select(func.sum(CheckResult.response_time_ms)).where(
+            CheckResult.monitor_id == monitor_id,
+            CheckResult.checked_at >= since,
+            CheckResult.status == CheckStatus.UP,
+        )
+    ) or 0.0
 
-    up_count = sum(1 for r in rows if r.status == "up")
-    uptime_percent = round((up_count / total_checks) * 100.0, 2)
+    # --- Nguồn 2: dữ liệu đã gom theo giờ ---
+    roll_total = await session.scalar(
+        select(func.sum(CheckRollup.total_checks)).where(
+            CheckRollup.monitor_id == monitor_id,
+            CheckRollup.bucket_start >= since,
+        )
+    ) or 0
+    roll_up = await session.scalar(
+        select(func.sum(CheckRollup.up_checks)).where(
+            CheckRollup.monitor_id == monitor_id,
+            CheckRollup.bucket_start >= since,
+        )
+    ) or 0
+    roll_resp_sum = await session.scalar(
+        select(
+            func.sum(CheckRollup.avg_response_ms * CheckRollup.up_checks)
+        ).where(
+            CheckRollup.monitor_id == monitor_id,
+            CheckRollup.bucket_start >= since,
+            CheckRollup.avg_response_ms.is_not(None),
+        )
+    ) or 0.0
 
-    latencies = [r.response_time_ms for r in rows if r.response_time_ms is not None]
-    avg_response_ms = (
-        round(sum(latencies) / len(latencies), 2) if latencies else None
-    )
+    total = int(raw_total) + int(roll_total)
+    up = int(raw_up) + int(roll_up)
+    resp_sum = float(raw_resp_sum or 0.0) + float(roll_resp_sum or 0.0)
+
+    percent = round(100.0 * up / total, 3) if total else 100.0
+    avg_ms = round(resp_sum / up, 1) if up else None
 
     return UptimeOut(
-        uptime_percent=uptime_percent,
-        avg_response_ms=avg_response_ms,
-        total_checks=total_checks,
+        uptime_percent=percent,
+        avg_response_ms=avg_ms,
+        total_checks=total,
     )
 
 
@@ -168,7 +209,7 @@ async def register(payload: AuthRequest, db: AsyncSession = Depends(get_db)):
         email=payload.email.lower().strip(),
         password_hash=hash_password(payload.password),
         role="customer",
-        plan_id=1,  # Mặc định gói Free
+        plan_id=1,
     )
     db.add(new_user)
     await db.commit()
@@ -202,7 +243,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-# ==================== B. MONITORS CRUD (CÓ KIỂM TRA GIỚI HẠN GÓI) ====================
+# ==================== B. MONITORS CRUD ====================
 @app.get("/monitors", response_model=List[MonitorOut])
 async def list_monitors(
     all: bool = Query(False, description="Admin có thể truyền ?all=true để xem toàn bộ"),
@@ -227,12 +268,10 @@ async def create_monitor(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # 1. Lấy thông tin gói dịch vụ của user
     plan = await db.scalar(select(Plan).where(Plan.id == current_user.plan_id))
     if not plan:
         plan = Plan(id=1, name="Free", max_monitors=5, min_interval=60, price=0)
 
-    # 2. Kiểm tra số lượng monitor hiện tại so với max_monitors của gói
     current_count = await db.scalar(
         select(func.count(Monitor.id)).where(Monitor.owner_id == current_user.id)
     )
@@ -242,7 +281,6 @@ async def create_monitor(
             detail=f"Đã đạt giới hạn số lượng monitor tối đa của gói {plan.name} ({plan.max_monitors} monitors)",
         )
 
-    # 3. Kiểm tra tần suất kiểm tra so với min_interval của gói
     if payload.interval_seconds < plan.min_interval:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -286,7 +324,6 @@ async def update_monitor(
 ):
     monitor = await get_owned_monitor_or_404(id, current_user, db)
 
-    # Kiểm tra giới hạn min_interval nếu có thay đổi interval_seconds
     if payload.interval_seconds is not None:
         owner_user = await db.scalar(select(User).where(User.id == monitor.owner_id))
         plan_id = owner_user.plan_id if owner_user else current_user.plan_id
@@ -318,7 +355,7 @@ async def delete_monitor(
     return DeleteOkResponse(ok=True)
 
 
-# ==================== C. RESULTS, UPTIME & INCIDENTS ====================
+# ==================== C. RESULTS, UPTIME & INCIDENTS (GỘP CẢ ROLLUPS) ====================
 @app.get("/monitors/{id}/results", response_model=List[CheckResultOut])
 async def get_monitor_results(
     id: int,
@@ -326,9 +363,24 @@ async def get_monitor_results(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Gộp cả check_rollups (dữ liệu lịch sử cũ đã gom theo giờ) và check_results
+    (dữ liệu thô gần đây) theo thứ tự thời gian tăng dần để vẽ biểu đồ.
+    """
     await get_owned_monitor_or_404(id, current_user, db)
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
-    stmt = (
+    since = utcnow() - timedelta(hours=hours)
+
+    rollup_res = await db.execute(
+        select(CheckRollup)
+        .where(
+            CheckRollup.monitor_id == id,
+            CheckRollup.bucket_start >= since,
+        )
+        .order_by(CheckRollup.bucket_start.asc())
+    )
+    rollup_rows = list(rollup_res.scalars().all())
+
+    raw_res = await db.execute(
         select(CheckResult)
         .where(
             CheckResult.monitor_id == id,
@@ -336,8 +388,44 @@ async def get_monitor_results(
         )
         .order_by(CheckResult.checked_at.asc())
     )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
+    raw_rows = list(raw_res.scalars().all())
+
+    combined_results: List[CheckResultOut] = []
+
+    for r in rollup_rows:
+        synthetic_status = "up" if r.up_checks > 0 or r.down_checks == 0 else "down"
+        if r.down_checks > r.up_checks:
+            synthetic_status = "down"
+        combined_results.append(
+            CheckResultOut(
+                id=-r.id,
+                monitor_id=r.monitor_id,
+                checked_at=r.bucket_start,
+                status=synthetic_status,
+                response_time_ms=r.avg_response_ms,
+                status_code=None,
+                ssl_days_left=None,
+                error=None,
+            )
+        )
+
+    for r in raw_rows:
+        status_str = r.status.value if hasattr(r.status, "value") else str(r.status)
+        combined_results.append(
+            CheckResultOut(
+                id=r.id,
+                monitor_id=r.monitor_id,
+                checked_at=r.checked_at,
+                status=status_str,
+                response_time_ms=r.response_time_ms,
+                status_code=r.status_code,
+                ssl_days_left=r.ssl_days_left,
+                error=r.error,
+            )
+        )
+
+    combined_results.sort(key=lambda item: item.checked_at)
+    return combined_results
 
 
 @app.get("/monitors/{id}/uptime", response_model=UptimeOut)
@@ -378,18 +466,12 @@ async def get_incidents(
     return list(result.scalars().all())
 
 
-# ==================== D. PUBLIC STATUS PAGE (KHÔNG CẦN TOKEN) ====================
+# ==================== D. PUBLIC STATUS PAGE ====================
 @app.get("/status/{public_id}", response_model=PublicStatusPageOut)
 async def get_public_status(
     public_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Trang trạng thái công khai:
-    - Nếu public_id là số nguyên: tìm tất cả monitor đang bật của user_id = public_id;
-      nếu user đó không có monitor, fallback tìm monitor có id = public_id.
-    - Nếu public_id là 'all' hoặc 'default': hiển thị toàn bộ monitors đang bật.
-    """
     monitors: List[Monitor] = []
     if public_id.isdigit():
         num_id = int(public_id)
@@ -425,7 +507,15 @@ async def get_public_status(
             .limit(1)
         )
         latest_check = latest_res.scalar_one_or_none()
-        current_status = latest_check.status if latest_check else "unknown"
+        if latest_check:
+            current_status = (
+                latest_check.status.value
+                if hasattr(latest_check.status, "value")
+                else str(latest_check.status)
+            )
+        else:
+            current_status = "unknown"
+
         if current_status == "down":
             down_count += 1
 
@@ -435,7 +525,7 @@ async def get_public_status(
             PublicMonitorStatus(
                 id=m.id,
                 name=m.name,
-                type=m.type,
+                type=m.type.value if hasattr(m.type, "value") else str(m.type),
                 target=m.target,
                 current_status=current_status,
                 uptime_percent_24h=uptime_info.uptime_percent,
@@ -458,7 +548,7 @@ async def get_public_status(
     )
 
 
-# ==================== E. API PHỤ TRỢ: PLANS, USERS & TELEGRAM CHANNELS ====================
+# ==================== E. API PHỤ TRỢ ====================
 @app.get("/plans", response_model=List[PlanOut])
 async def list_plans(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Plan).order_by(Plan.id.asc()))
