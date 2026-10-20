@@ -53,3 +53,12 @@ TV1 gửi `POST` JSON này tới ông:
 - Mẫu tạo JSON đó nằm ở `monitoring-core/app/notifier.py` → `event_to_dict()` (tham khảo).
 - Map severity → icon: `critical`🔴 `warning`🟡 `info`🟢.
 - Nhánh git của ông: `tv5-telegram`.
+
+## 4. Phần đã triển khai trong repo
+
+Service, hướng dẫn chạy và kiểm thử tích hợp nằm trong `telegram-bot/`.
+TV2 cần gọi endpoint nội bộ `POST /link-codes` sau khi user xác thực để cấp mã
+ghép Telegram dùng một lần; mô tả request/response nằm trong README của service.
+Các bảng chia sẻ vẫn theo §A, TV5 chỉ tự tạo bảng riêng cho mã ghép và chống gửi
+lặp báo cáo. Kết quả kiểm thử và công thức thống kê được ghi tại
+[`BAO-CAO-TV5.md`](BAO-CAO-TV5.md).
