@@ -113,3 +113,19 @@ tests/test_alert_engine.py
 
 `kind` ∈ `down | recovered | flapping | stabilized | ssl_expiring`
 `severity` ∈ `critical | warning | info`
+
+## Ghép chung với Backend API (TV2) trên Postgres
+
+TV2 đã dựng Backend API (FastAPI) dùng **đúng 8 bảng** khớp schema ở đây, và khi
+khởi động sẽ tự tạo bảng + seed gói dịch vụ/admin. Vì vậy khi chạy chung:
+
+1. Trỏ cả 2 service vào cùng Postgres:
+   `DATABASE_URL=postgresql+asyncpg://app:<mật khẩu>@db:5432/monitoring`
+2. **Để TV2 làm chủ việc tạo bảng** — đặt cho monitoring-core:
+   `AUTO_CREATE_TABLES=false` và `SEED_SAMPLE_MONITORS=false`
+   (tránh 2 service cùng chạy `create_all` lúc khởi động).
+3. Luồng dữ liệu: khách tạo monitor qua API của TV2 → monitoring-core đọc bảng
+   `monitors`, kiểm tra, rồi GHI `check_results` / `incidents` / `check_rollups`
+   / `monitor_alert_states` → TV2 đọc lại để trả cho Frontend (TV3).
+
+Đã cài sẵn `asyncpg` trong `requirements.txt` để kết nối Postgres.

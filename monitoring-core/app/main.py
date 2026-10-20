@@ -22,8 +22,12 @@ from .seed import seed_if_empty
 
 
 async def main() -> None:
-    await init_db()
-    await seed_if_empty()
+    # Khi ghép chung với Backend API (TV2), đặt AUTO_CREATE_TABLES=false để TV2
+    # làm chủ việc tạo bảng; monitoring-core chỉ ghi dữ liệu vào bảng có sẵn.
+    if settings.auto_create_tables:
+        await init_db()
+    if settings.seed_sample_monitors:
+        await seed_if_empty()
 
     notifier = build_notifier(settings.alert_webhook_url or None)
     scheduler = MonitorScheduler(
