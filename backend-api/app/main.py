@@ -20,6 +20,7 @@ from app.models import (
     CheckStatus,
     Incident,
     Monitor,
+    MonitorAlertState,
     NotificationChannel,
     Plan,
     User,
@@ -121,6 +122,97 @@ async def get_owned_monitor_or_404(
 
 
 # ==================== HÀM COMPUTE_UPTIME (ĐỒNG BỘ 100% VỚI TV1) ====================
+def _status_value(value) -> str:
+    """Enum CheckStatus hoặc chuỗi -> 'up' / 'down'."""
+    return str(getattr(value, "value", value))
+
+
+def derive_current_status(
+    monitor: Monitor,
+    alert_state: Optional[MonitorAlertState],
+    last_check: Optional[CheckResult],
+) -> str:
+    """Trạng thái hiện tại của 1 monitor, bám theo Alert Engine của TV1.
+
+    - paused   : monitor đang tắt.
+    - down     : Alert Engine đã XÁC NHẬN sập (đúng lúc Telegram báo SẬP).
+    - degraded : đang chập chờn, hoặc vừa lỗi nhưng chưa đủ số lần để xác nhận.
+    - up       : hoạt động bình thường.
+    - pending  : chưa được kiểm tra lần nào.
+    """
+    if not monitor.enabled:
+        return "paused"
+    if alert_state is not None:
+        if alert_state.flapping_active:
+            return "degraded"
+        if _status_value(alert_state.confirmed) == "down":
+            return "down"
+        if (alert_state.consecutive_failures or 0) > 0:
+            return "degraded"
+        return "up"
+    if last_check is not None:
+        return "up" if _status_value(last_check.status) == "up" else "degraded"
+    return "pending"
+
+
+async def build_monitor_outs(
+    monitors: List[Monitor], db: AsyncSession
+) -> List[MonitorOut]:
+    """Gắn trạng thái hiện tại + lần kiểm tra gần nhất vào từng monitor (2 query cho cả danh sách)."""
+    if not monitors:
+        return []
+    ids = [m.id for m in monitors]
+
+    states = {
+        s.monitor_id: s
+        for s in (
+            await db.scalars(
+                select(MonitorAlertState).where(MonitorAlertState.monitor_id.in_(ids))
+            )
+        ).all()
+    }
+
+    latest_sub = (
+        select(
+            CheckResult.monitor_id,
+            func.max(CheckResult.checked_at).label("last_at"),
+        )
+        .where(CheckResult.monitor_id.in_(ids))
+        .group_by(CheckResult.monitor_id)
+        .subquery()
+    )
+    latest_rows = (
+        await db.scalars(
+            select(CheckResult).join(
+                latest_sub,
+                (CheckResult.monitor_id == latest_sub.c.monitor_id)
+                & (CheckResult.checked_at == latest_sub.c.last_at),
+            )
+        )
+    ).all()
+    latest = {r.monitor_id: r for r in latest_rows}
+
+    outs: List[MonitorOut] = []
+    for m in monitors:
+        state = states.get(m.id)
+        last = latest.get(m.id)
+        current = derive_current_status(m, state, last)
+        last_error = None
+        if current in ("down", "degraded"):
+            last_error = (state.last_cause if state else None) or (last.error if last else None)
+        outs.append(
+            MonitorOut.model_validate(m).model_copy(
+                update={
+                    "current_status": current,
+                    "last_checked_at": last.checked_at if last else None,
+                    "last_response_ms": last.response_time_ms if last else None,
+                    "last_error": last_error,
+                }
+            )
+        )
+    return outs
+
+
 async def calculate_monitor_uptime(
     monitor_id: int,
     window_hours: int,
@@ -259,7 +351,7 @@ async def list_monitors(
             .order_by(Monitor.id.asc())
         )
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return await build_monitor_outs(list(result.scalars().all()), db)
 
 
 @app.post("/monitors", response_model=MonitorOut, status_code=status.HTTP_201_CREATED)
@@ -303,7 +395,7 @@ async def create_monitor(
     db.add(monitor)
     await db.commit()
     await db.refresh(monitor)
-    return monitor
+    return (await build_monitor_outs([monitor], db))[0]
 
 
 @app.get("/monitors/{id}", response_model=MonitorOut)
@@ -312,7 +404,8 @@ async def get_monitor(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_owned_monitor_or_404(id, current_user, db)
+    monitor = await get_owned_monitor_or_404(id, current_user, db)
+    return (await build_monitor_outs([monitor], db))[0]
 
 
 @app.put("/monitors/{id}", response_model=MonitorOut)
@@ -340,7 +433,7 @@ async def update_monitor(
 
     await db.commit()
     await db.refresh(monitor)
-    return monitor
+    return (await build_monitor_outs([monitor], db))[0]
 
 
 @app.delete("/monitors/{id}", response_model=DeleteOkResponse)
@@ -497,49 +590,32 @@ async def get_public_status(
         monitors = list(res.scalars().all())
 
     status_items: List[PublicMonitorStatus] = []
-    down_count = 0
+    # Dùng chung logic trạng thái với dashboard (bám Alert Engine của TV1).
+    enriched = await build_monitor_outs(monitors, db)
 
-    for m in monitors:
-        latest_res = await db.execute(
-            select(CheckResult)
-            .where(CheckResult.monitor_id == m.id)
-            .order_by(CheckResult.checked_at.desc())
-            .limit(1)
-        )
-        latest_check = latest_res.scalar_one_or_none()
-        if latest_check:
-            current_status = (
-                latest_check.status.value
-                if hasattr(latest_check.status, "value")
-                else str(latest_check.status)
-            )
-        else:
-            current_status = "unknown"
-
-        if current_status == "down":
-            down_count += 1
-
+    for m in enriched:
         uptime_info = await calculate_monitor_uptime(m.id, 24, db)
-
         status_items.append(
             PublicMonitorStatus(
                 id=m.id,
                 name=m.name,
                 type=m.type.value if hasattr(m.type, "value") else str(m.type),
                 target=m.target,
-                current_status=current_status,
+                current_status=m.current_status,
                 uptime_percent_24h=uptime_info.uptime_percent,
                 avg_response_ms_24h=uptime_info.avg_response_ms,
-                last_checked_at=latest_check.checked_at if latest_check else None,
+                last_checked_at=m.last_checked_at,
             )
         )
 
-    if not status_items or down_count == 0:
-        overall = "operational"
-    elif down_count == len(status_items):
+    down_count = sum(1 for s in status_items if s.current_status == "down")
+    degraded_count = sum(1 for s in status_items if s.current_status == "degraded")
+    if down_count and down_count == len(status_items):
         overall = "down"
-    else:
+    elif down_count or degraded_count:
         overall = "degraded"
+    else:
+        overall = "operational"
 
     return PublicStatusPageOut(
         public_id=public_id,

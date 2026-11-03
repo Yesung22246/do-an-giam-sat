@@ -82,6 +82,14 @@ class MonitorOut(BaseModel):
     enabled: bool
     created_at: datetime
 
+    # Trạng thái hiện tại — lấy từ Alert Engine của monitoring-core (TV1) nên
+    # khớp với cảnh báo Telegram: lỗi thoáng qua chưa xác nhận thì vẫn "up".
+    #   up | down | degraded (đang chập chờn) | paused (đã tắt) | pending (chưa kiểm tra lần nào)
+    current_status: Literal["up", "down", "degraded", "paused", "pending"] = "pending"
+    last_checked_at: Optional[datetime] = None
+    last_response_ms: Optional[float] = None
+    last_error: Optional[str] = None
+
 
 class DeleteOkResponse(BaseModel):
     ok: bool = True
