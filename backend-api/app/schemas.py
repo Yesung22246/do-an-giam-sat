@@ -1,6 +1,23 @@
-from datetime import datetime
-from typing import Optional, List, Literal
-from pydantic import BaseModel, EmailStr, ConfigDict, Field
+from datetime import datetime, timezone
+from typing import Annotated, Optional, List, Literal
+from pydantic import BaseModel, EmailStr, ConfigDict, Field, PlainSerializer
+
+
+def _serialize_utc(value: datetime) -> str:
+    """Luôn trả thời gian kèm múi giờ UTC (vd ...+00:00).
+
+    SQLite lưu datetime không kèm múi giờ -> nếu trả "2026-11-03T12:57:19" thì
+    trình duyệt ở Việt Nam hiểu là giờ địa phương và lệch 7 tiếng. Mọi thời gian
+    trong hệ thống đều ghi theo UTC, nên gắn UTC trước khi trả ra là đúng.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
+UTCDateTime = Annotated[
+    datetime, PlainSerializer(_serialize_utc, return_type=str, when_used="json")
+]
 
 
 # ==================== AUTH & USER SCHEMAS ====================
@@ -30,7 +47,7 @@ class UserOut(BaseModel):
     email: str
     role: str
     plan_id: int
-    created_at: datetime
+    created_at: UTCDateTime
     plan: Optional[PlanOut] = None
 
 
@@ -80,13 +97,13 @@ class MonitorOut(BaseModel):
     retries: int
     ssl_warn_days: int
     enabled: bool
-    created_at: datetime
+    created_at: UTCDateTime
 
     # Trạng thái hiện tại — lấy từ Alert Engine của monitoring-core (TV1) nên
     # khớp với cảnh báo Telegram: lỗi thoáng qua chưa xác nhận thì vẫn "up".
     #   up | down | degraded (đang chập chờn) | paused (đã tắt) | pending (chưa kiểm tra lần nào)
     current_status: Literal["up", "down", "degraded", "paused", "pending"] = "pending"
-    last_checked_at: Optional[datetime] = None
+    last_checked_at: Optional[UTCDateTime] = None
     last_response_ms: Optional[float] = None
     last_error: Optional[str] = None
 
@@ -101,7 +118,7 @@ class CheckResultOut(BaseModel):
 
     id: int
     monitor_id: int
-    checked_at: datetime
+    checked_at: UTCDateTime
     status: str
     response_time_ms: Optional[float] = None
     status_code: Optional[int] = None
@@ -121,8 +138,8 @@ class IncidentOut(BaseModel):
     id: int
     monitor_id: int
     state: str
-    started_at: datetime
-    resolved_at: Optional[datetime] = None
+    started_at: UTCDateTime
+    resolved_at: Optional[UTCDateTime] = None
     cause: Optional[str] = None
     severity: str
 
@@ -136,7 +153,7 @@ class PublicMonitorStatus(BaseModel):
     current_status: str
     uptime_percent_24h: float
     avg_response_ms_24h: Optional[float] = None
-    last_checked_at: Optional[datetime] = None
+    last_checked_at: Optional[UTCDateTime] = None
 
 
 class PublicStatusPageOut(BaseModel):
