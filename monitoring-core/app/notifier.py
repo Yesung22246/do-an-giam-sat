@@ -52,7 +52,8 @@ class ConsoleNotifier(Notifier):
 
     async def send(self, event: AlertEvent) -> None:
         icon = self._ICON.get(event.severity, "[*]")
-        ts = event.at.strftime("%H:%M:%S")
+        # Thời gian trong hệ thống là UTC; in ra theo giờ của máy cho dễ đọc khi demo.
+        ts = event.at.astimezone().strftime("%H:%M:%S")
         print(f"{ts} {icon} #{event.monitor_id} {event.monitor_name}: {event.message}")
 
 
