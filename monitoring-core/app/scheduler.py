@@ -40,39 +40,81 @@ class MonitorScheduler:
         policy: AlertPolicy | None = None,
         rollup_interval_seconds: int = 3600,
         raw_retention_hours: int = 48,
+        sync_interval_seconds: int = 15,
     ) -> None:
         self.notifier = notifier
         self.engine = AlertEngine(policy=policy)
         self._sem = asyncio.Semaphore(max_concurrent)
-        self._tasks: list[asyncio.Task] = []
         self._stop = asyncio.Event()
+        # Mỗi monitor đang giám sát có 1 vòng lặp riêng: {monitor_id: (task, interval)}.
+        self._loops: dict[int, tuple[asyncio.Task, int]] = {}
         # Gom dữ liệu cũ định kỳ để DB không phình (mặc định mỗi giờ).
         self.rollup_interval_seconds = rollup_interval_seconds
         self.raw_retention_hours = raw_retention_hours
+        # Chu kỳ đồng bộ danh sách monitor với DB (khách thêm/sửa/xóa qua API của TV2).
+        self.sync_interval_seconds = sync_interval_seconds
 
     async def run_forever(self) -> None:
-        """Nạp danh sách monitor rồi chạy mỗi cái một vòng lặp cho tới khi dừng."""
-        async with SessionLocal() as session:
-            monitors = (
-                await session.scalars(select(Monitor).where(Monitor.enabled.is_(True)))
-            ).all()
+        """Chạy cho tới khi dừng: liên tục đồng bộ danh sách monitor với DB.
 
-        if not monitors:
-            print("[scheduler] Chưa có monitor nào (enabled). Dừng.")
-            return
-
-        print(f"[scheduler] Bắt đầu giám sát {len(monitors)} mục tiêu.")
-        self._tasks = [
-            asyncio.create_task(self._monitor_loop(m.id, m.interval_seconds))
-            for m in monitors
-        ]
-        self._tasks.append(asyncio.create_task(self._rollup_loop()))
+        Khi ghép với Backend API (TV2), khách thêm/sửa/xóa/tắt monitor bất cứ lúc
+        nào -> mỗi `sync_interval_seconds` scheduler đọc lại bảng `monitors` để
+        bật vòng lặp cho monitor mới, dừng monitor đã xóa/tắt, và áp chu kỳ mới.
+        DB trống lúc khởi động cũng không sao — cứ chờ monitor đầu tiên xuất hiện.
+        """
+        rollup_task = asyncio.create_task(self._rollup_loop())
+        print("[scheduler] Đã khởi động, đang đồng bộ danh sách monitor...")
         try:
-            await self._stop.wait()
+            while not self._stop.is_set():
+                try:
+                    await self.sync_monitors()
+                except Exception as exc:  # DB tạm lỗi thì thử lại ở vòng sau
+                    print(f"[scheduler] Lỗi khi đồng bộ monitor: {exc}")
+                try:
+                    await asyncio.wait_for(
+                        self._stop.wait(), timeout=self.sync_interval_seconds
+                    )
+                except asyncio.TimeoutError:
+                    pass
         finally:
-            for t in self._tasks:
+            tasks = [t for t, _ in self._loops.values()] + [rollup_task]
+            for t in tasks:
                 t.cancel()
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._loops.clear()
+
+    async def sync_monitors(self) -> None:
+        """Khớp các vòng lặp đang chạy với danh sách monitor đang bật trong DB."""
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(Monitor.id, Monitor.interval_seconds).where(
+                        Monitor.enabled.is_(True)
+                    )
+                )
+            ).all()
+        wanted = {mid: interval for mid, interval in rows}
+
+        # Dừng monitor đã bị xóa/tắt, hoặc đổi chu kỳ (sẽ bật lại bên dưới).
+        for mid in list(self._loops):
+            task, interval = self._loops[mid]
+            if mid not in wanted or wanted[mid] != interval:
+                task.cancel()
+                del self._loops[mid]
+                if mid not in wanted:
+                    self.engine.forget(mid)
+                    print(f"[scheduler] Ngừng giám sát monitor #{mid}.")
+
+        # Bật vòng lặp cho monitor mới (hoặc vừa đổi chu kỳ).
+        for mid, interval in wanted.items():
+            if mid not in self._loops:
+                task = asyncio.create_task(self._monitor_loop(mid, interval))
+                self._loops[mid] = (task, interval)
+                print(f"[scheduler] Bắt đầu giám sát monitor #{mid} (mỗi {interval}s).")
+
+    @property
+    def active_monitor_ids(self) -> set[int]:
+        return set(self._loops)
 
     def stop(self) -> None:
         self._stop.set()

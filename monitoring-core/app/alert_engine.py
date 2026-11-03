@@ -128,6 +128,13 @@ class AlertEngine:
     def has_state(self, monitor_id: int) -> bool:
         return monitor_id in self._states
 
+    def forget(self, monitor_id: int) -> None:
+        """Bỏ trạng thái trong RAM của monitor đã bị xóa/tắt.
+
+        Nếu monitor được bật lại, trạng thái sẽ được nạp lại từ DB ở lần kiểm tra sau.
+        """
+        self._states.pop(monitor_id, None)
+
     def load_state(self, monitor_id: int, data: dict) -> None:
         """Nạp trạng thái đã lưu (gọi khi service khởi động lại)."""
         self._states[monitor_id] = _MonitorState.from_dict(data)

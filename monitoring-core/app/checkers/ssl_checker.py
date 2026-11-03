@@ -6,11 +6,12 @@ có cảnh báo "sắp hết hạn" hay không dựa trên ngưỡng ssl_warn_da
 """
 from __future__ import annotations
 
+import asyncio
 import socket
 import ssl
 from datetime import datetime, timezone
 
-import asyncio
+import certifi
 
 from ..models import Monitor
 from .base import CheckOutcome
@@ -20,7 +21,10 @@ _CERT_TIME_FMT = "%b %d %H:%M:%S %Y %Z"
 
 def _fetch_cert_days_left(host: str, port: int, timeout: float) -> int:
     """Hàm đồng bộ (chạy trong thread): bắt tay TLS và đọc ngày hết hạn."""
-    ctx = ssl.create_default_context()
+    # Dùng bộ CA của certifi (giống checker HTTP qua httpx) thay vì kho chứng chỉ
+    # của hệ điều hành: kho HĐH có máy thiếu CA trung gian -> báo nhầm "chứng chỉ
+    # không hợp lệ" cho site hoàn toàn bình thường (đã gặp thật với example.com).
+    ctx = ssl.create_default_context(cafile=certifi.where())
     with socket.create_connection((host, port), timeout=timeout) as sock:
         with ctx.wrap_socket(sock, server_hostname=host) as ssock:
             cert = ssock.getpeercert()
