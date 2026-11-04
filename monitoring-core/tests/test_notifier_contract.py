@@ -8,6 +8,7 @@ Nguồn hợp đồng: telegram-bot/app/main.py (class AlertPayload) của TV5 �
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import httpx
@@ -93,7 +94,9 @@ async def test_webhook_sends_shared_secret_header_and_contract_json():
     await notifier.send(_event(AlertKind.DOWN, CheckOutcome.down("refused")))
 
     assert captured["secret"] == "shared-test-secret-for-tv1-and-tv5"
-    assert '"kind":"down"' in captured["payload"]
+    # So sánh theo dữ liệu, không theo chuỗi: httpx 0.27 sinh JSON có dấu cách
+    # ("kind": "down"), bản mới hơn thì không — test không được phụ thuộc vào đó.
+    assert json.loads(captured["payload"])["kind"] == "down"
 
 
 def test_webhook_notifier_requires_a_secret():

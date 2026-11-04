@@ -16,6 +16,10 @@ from app.checkers.base import CheckOutcome
 from app.notifier import WebhookNotifier
 
 
+# Test này nạp code của telegram-bot (cần fastapi). Môi trường chỉ cài
+# monitoring-core thì bỏ qua test này, thay vì làm pytest dừng toàn bộ.
+pytest.importorskip("fastapi", reason="cần cài requirements của telegram-bot")
+
 BOT_APP_DIR = Path(__file__).resolve().parents[2] / "telegram-bot" / "app"
 BOT_PACKAGE = "telegram_bot_service"
 
