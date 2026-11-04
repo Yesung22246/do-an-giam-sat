@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import User
 
-JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-monitoring-key-2026")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("BẮT BUỘC phải đặt biến môi trường JWT_SECRET trước khi khởi động hệ thống!")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "168"))  # 7 ngày
 

@@ -63,7 +63,9 @@ async def seed_initial_data(db: AsyncSession) -> None:
         await db.commit()
 
     admin_email = os.getenv("ADMIN_EMAIL", "admin@monitoring.local").lower().strip()
-    admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
+    admin_password = os.getenv("ADMIN_PASSWORD")
+    if not admin_password:
+        raise RuntimeError("BẮT BUỘC phải đặt biến môi trường ADMIN_PASSWORD trước khi khởi động hệ thống!")
 
     admin_exists = await db.scalar(
         select(User).where(User.email == admin_email)
