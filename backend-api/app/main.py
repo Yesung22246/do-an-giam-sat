@@ -1,7 +1,9 @@
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
@@ -11,6 +13,7 @@ from app.auth import (
     create_access_token,
     get_current_user,
     hash_password,
+    require_admin,
     verify_password,
 )
 from app.database import AsyncSessionLocal, Base, engine, get_db
@@ -39,6 +42,7 @@ from app.schemas import (
     PlanOut,
     PublicMonitorStatus,
     PublicStatusPageOut,
+    TelegramLinkCodeOut,
     TokenResponse,
     UpdateUserPlanRequest,
     UptimeOut,
@@ -47,7 +51,7 @@ from app.schemas import (
 
 
 async def seed_initial_data(db: AsyncSession) -> None:
-    """Tự động khởi tạo 3 gói dịch vụ (Free, Pro, Business) và tài khoản Admin."""
+    """Tự động khởi tạo 3 gói dịch vụ (Free, Pro, Business) và tài khoản Admin từ biến môi trường."""
     plans_count = await db.scalar(select(func.count(Plan.id)))
     if not plans_count or plans_count == 0:
         default_plans = [
@@ -58,13 +62,16 @@ async def seed_initial_data(db: AsyncSession) -> None:
         db.add_all(default_plans)
         await db.commit()
 
+    admin_email = os.getenv("ADMIN_EMAIL", "admin@monitoring.local").lower().strip()
+    admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
+
     admin_exists = await db.scalar(
-        select(User).where(User.email == "admin@monitoring.local")
+        select(User).where(User.email == admin_email)
     )
     if not admin_exists:
         admin_user = User(
-            email="admin@monitoring.local",
-            password_hash=hash_password("admin123"),
+            email=admin_email,
+            password_hash=hash_password(admin_password),
             role="admin",
             plan_id=3,
         )
@@ -100,7 +107,6 @@ app.add_middleware(
 )
 
 
-# ==================== HELPER KIỂM TRA QUYỀN SỞ HỮU MONITOR ====================
 async def get_owned_monitor_or_404(
     monitor_id: int,
     current_user: User,
@@ -121,9 +127,7 @@ async def get_owned_monitor_or_404(
     return monitor
 
 
-# ==================== HÀM COMPUTE_UPTIME (ĐỒNG BỘ 100% VỚI TV1) ====================
 def _status_value(value) -> str:
-    """Enum CheckStatus hoặc chuỗi -> 'up' / 'down'."""
     return str(getattr(value, "value", value))
 
 
@@ -132,14 +136,6 @@ def derive_current_status(
     alert_state: Optional[MonitorAlertState],
     last_check: Optional[CheckResult],
 ) -> str:
-    """Trạng thái hiện tại của 1 monitor, bám theo Alert Engine của TV1.
-
-    - paused   : monitor đang tắt.
-    - down     : Alert Engine đã XÁC NHẬN sập (đúng lúc Telegram báo SẬP).
-    - degraded : đang chập chờn, hoặc vừa lỗi nhưng chưa đủ số lần để xác nhận.
-    - up       : hoạt động bình thường.
-    - pending  : chưa được kiểm tra lần nào.
-    """
     if not monitor.enabled:
         return "paused"
     if alert_state is not None:
@@ -158,7 +154,6 @@ def derive_current_status(
 async def build_monitor_outs(
     monitors: List[Monitor], db: AsyncSession
 ) -> List[MonitorOut]:
-    """Gắn trạng thái hiện tại + lần kiểm tra gần nhất vào từng monitor (2 query cho cả danh sách)."""
     if not monitors:
         return []
     ids = [m.id for m in monitors]
@@ -219,14 +214,8 @@ async def calculate_monitor_uptime(
     session: AsyncSession,
     now: Optional[datetime] = None,
 ) -> UptimeOut:
-    """
-    Bê nguyên thuật toán compute_uptime từ monitoring-core/app/uptime.py của TV1:
-    Cộng dồn từ cả check_results (dữ liệu thô gần đây) và check_rollups (dữ liệu
-    đã gom theo giờ) để kết quả đúng kể cả với cửa sổ dài (vd 30 ngày).
-    """
     since = (now or utcnow()) - timedelta(hours=window_hours)
 
-    # --- Nguồn 1: dữ liệu thô gần đây ---
     raw_total = await session.scalar(
         select(func.count(CheckResult.id)).where(
             CheckResult.monitor_id == monitor_id,
@@ -248,7 +237,6 @@ async def calculate_monitor_uptime(
         )
     ) or 0.0
 
-    # --- Nguồn 2: dữ liệu đã gom theo giờ ---
     roll_total = await session.scalar(
         select(func.sum(CheckRollup.total_checks)).where(
             CheckRollup.monitor_id == monitor_id,
@@ -285,7 +273,6 @@ async def calculate_monitor_uptime(
     )
 
 
-# ==================== A. AUTH ROUTES ====================
 @app.post("/auth/register", response_model=TokenResponse)
 async def register(payload: AuthRequest, db: AsyncSession = Depends(get_db)):
     existing = await db.scalar(
@@ -335,7 +322,6 @@ async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-# ==================== B. MONITORS CRUD ====================
 @app.get("/monitors", response_model=List[MonitorOut])
 async def list_monitors(
     all: bool = Query(False, description="Admin có thể truyền ?all=true để xem toàn bộ"),
@@ -448,7 +434,6 @@ async def delete_monitor(
     return DeleteOkResponse(ok=True)
 
 
-# ==================== C. RESULTS, UPTIME & INCIDENTS (GỘP CẢ ROLLUPS) ====================
 @app.get("/monitors/{id}/results", response_model=List[CheckResultOut])
 async def get_monitor_results(
     id: int,
@@ -456,10 +441,6 @@ async def get_monitor_results(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Gộp cả check_rollups (dữ liệu lịch sử cũ đã gom theo giờ) và check_results
-    (dữ liệu thô gần đây) theo thứ tự thời gian tăng dần để vẽ biểu đồ.
-    """
     await get_owned_monitor_or_404(id, current_user, db)
     since = utcnow() - timedelta(hours=hours)
 
@@ -559,7 +540,6 @@ async def get_incidents(
     return list(result.scalars().all())
 
 
-# ==================== D. PUBLIC STATUS PAGE ====================
 @app.get("/status/{public_id}", response_model=PublicStatusPageOut)
 async def get_public_status(
     public_id: str,
@@ -589,9 +569,8 @@ async def get_public_status(
         )
         monitors = list(res.scalars().all())
 
-    status_items: List[PublicMonitorStatus] = []
-    # Dùng chung logic trạng thái với dashboard (bám Alert Engine của TV1).
     enriched = await build_monitor_outs(monitors, db)
+    status_items: List[PublicMonitorStatus] = []
 
     for m in enriched:
         uptime_info = await calculate_monitor_uptime(m.id, 24, db)
@@ -599,7 +578,7 @@ async def get_public_status(
             PublicMonitorStatus(
                 id=m.id,
                 name=m.name,
-                type=m.type.value if hasattr(m.type, "value") else str(m.type),
+                type=m.type,
                 target=m.target,
                 current_status=m.current_status,
                 uptime_percent_24h=uptime_info.uptime_percent,
@@ -624,10 +603,18 @@ async def get_public_status(
     )
 
 
-# ==================== E. API PHỤ TRỢ ====================
 @app.get("/plans", response_model=List[PlanOut])
 async def list_plans(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Plan).order_by(Plan.id.asc()))
+    return list(result.scalars().all())
+
+
+@app.get("/users", response_model=List[UserOut])
+async def list_users(
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).order_by(User.id.asc()))
     return list(result.scalars().all())
 
 
@@ -635,15 +622,9 @@ async def list_plans(db: AsyncSession = Depends(get_db)):
 async def change_user_plan(
     id: int,
     payload: UpdateUserPlanRequest,
-    current_user: User = Depends(get_current_user),
+    _admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    if current_user.role != "admin" and current_user.id != id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Không có quyền thay đổi gói dịch vụ của người dùng khác",
-        )
-
     plan = await db.scalar(select(Plan).where(Plan.id == payload.plan_id))
     if not plan:
         raise HTTPException(
@@ -662,6 +643,67 @@ async def change_user_plan(
     await db.commit()
     await db.refresh(target_user)
     return target_user
+
+
+async def _issue_telegram_link_code(current_user: User) -> TelegramLinkCodeOut:
+    bot_url = os.getenv("TELEGRAM_BOT_URL", "http://telegram-bot:8080").rstrip("/")
+    api_key = os.getenv("TELEGRAM_LINK_API_KEY", "")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chưa cấu hình TELEGRAM_LINK_API_KEY trên backend-api",
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{bot_url}/link-codes",
+                json={"user_id": current_user.id},
+                headers={"X-Internal-API-Key": api_key},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Không thể kết nối tới dịch vụ telegram-bot: {exc}",
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"telegram-bot từ chối cấp mã: {resp.text}",
+        )
+
+    data = resp.json()
+    code = data["code"]
+    expires_raw = data["expires_at"]
+    if isinstance(expires_raw, str):
+        expires_at = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
+    else:
+        expires_at = expires_raw
+
+    return TelegramLinkCodeOut(
+        code=code,
+        expires_at=expires_at,
+        instruction=f"Mở bot và gửi /start {code}",
+    )
+
+
+@app.post(
+    "/notification-channels/telegram/link-code",
+    response_model=TelegramLinkCodeOut,
+)
+async def create_telegram_link_code(
+    current_user: User = Depends(get_current_user),
+):
+    return await _issue_telegram_link_code(current_user)
+
+
+@app.post("/telegram/link-code", response_model=TelegramLinkCodeOut)
+async def create_telegram_link_code_alias(
+    current_user: User = Depends(get_current_user),
+):
+    return await _issue_telegram_link_code(current_user)
 
 
 @app.get("/notification-channels", response_model=List[NotificationChannelOut])

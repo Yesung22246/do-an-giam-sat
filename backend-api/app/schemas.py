@@ -162,7 +162,7 @@ class PublicStatusPageOut(BaseModel):
     monitors: List[PublicMonitorStatus]
 
 
-# ==================== NOTIFICATION CHANNELS ====================
+# ==================== NOTIFICATION CHANNELS & TELEGRAM LINK ====================
 class NotificationChannelCreate(BaseModel):
     type: str = "telegram"
     target: str = Field(..., min_length=1, description="Telegram chat_id")
@@ -175,3 +175,9 @@ class NotificationChannelOut(BaseModel):
     user_id: int
     type: str
     target: str
+
+
+class TelegramLinkCodeOut(BaseModel):
+    code: str
+    expires_at: UTCDateTime
+    instruction: str
