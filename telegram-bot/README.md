@@ -7,6 +7,7 @@ chủ monitor, hỗ trợ lệnh xem tình trạng và phát báo cáo ngày/tu�
 
 - `POST /alerts`: nhận JSON theo hợp đồng §C của nhóm; tra `monitors.owner_id`
   và `notification_channels`, rồi gửi tới các chat Telegram đã liên kết.
+  Request phải có header `X-Alert-Secret`; thiếu/sai secret bị từ chối.
 - `POST /link-codes`: endpoint nội bộ cho Backend API TV2 tạo mã ghép dùng một
   lần, hết hạn sau 10 phút. TV2 chỉ cần gọi endpoint này sau khi xác thực user,
   rồi hiển thị mã để user gửi cho bot bằng `/start <mã>`.
@@ -24,14 +25,19 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env
-# Điền TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_URL, TELEGRAM_WEBHOOK_SECRET,
-# TELEGRAM_LINK_API_KEY và DATABASE_URL trong .env
+# Điền ALERT_WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET,
+# TELEGRAM_LINK_API_KEY và DATABASE_URL trong .env. Chỉ đặt TELEGRAM_WEBHOOK_URL
+# sau khi có HTTPS endpoint public.
 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
 Telegram yêu cầu URL webhook HTTPS có thể truy cập từ Internet. Khi khởi động,
 service tự đăng ký URL với Telegram Bot API. Khi chạy Docker nội bộ, TV1 trỏ
-`ALERT_WEBHOOK_URL=http://telegram-bot:8080/alerts`.
+`ALERT_WEBHOOK_URL=http://telegram-bot:8080/alerts` và gửi header
+`X-Alert-Secret` bằng cùng giá trị `ALERT_WEBHOOK_SECRET`.
+Secret tối thiểu 32 ký tự; có thể sinh một lần bằng
+`python -c "import secrets; print(secrets.token_hex(32))"` rồi đặt cùng giá trị
+trong environment của hai service. Không đưa giá trị thật vào Git.
 
 ## Hợp đồng ghép với TV2
 

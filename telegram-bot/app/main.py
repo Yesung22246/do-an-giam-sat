@@ -124,8 +124,28 @@ def create_app(
         }
 
     @app.post("/alerts")
-    async def receive_alert(event: AlertPayload, request: Request):
+    async def receive_alert(
+        event: AlertPayload,
+        request: Request,
+        x_alert_secret: str | None = Header(default=None),
+    ):
         """Receive the locked TV1 JSON contract and notify the monitor owner."""
+        expected_secret = config.alert_webhook_secret
+        if not expected_secret:
+            raise HTTPException(
+                status_code=503,
+                detail="alert webhook authentication is not configured",
+            )
+        if len(expected_secret) < 32:
+            raise HTTPException(
+                status_code=503,
+                detail="alert webhook secret must contain at least 32 characters",
+            )
+        if not x_alert_secret or not secrets.compare_digest(
+            x_alert_secret, expected_secret
+        ):
+            raise HTTPException(status_code=401, detail="invalid alert webhook secret")
+
         session_factory = request.app.state.database.sessions
         async with session_factory() as session:
             owner_id = await session.scalar(

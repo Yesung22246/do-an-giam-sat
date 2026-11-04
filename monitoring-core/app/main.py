@@ -29,7 +29,10 @@ async def main() -> None:
     if settings.seed_sample_monitors:
         await seed_if_empty()
 
-    notifier = build_notifier(settings.alert_webhook_url or None)
+    notifier = build_notifier(
+        settings.alert_webhook_url or None,
+        settings.alert_webhook_secret,
+    )
     scheduler = MonitorScheduler(
         notifier=notifier, max_concurrent=settings.max_concurrent_checks
     )

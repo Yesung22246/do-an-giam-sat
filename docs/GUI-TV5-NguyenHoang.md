@@ -52,7 +52,9 @@ TV1 gửi `POST` JSON này tới ông:
 - Ông **không cần hiểu bên trong TV1** làm gì — chỉ cần khớp JSON mục 1.
 - Mẫu tạo JSON đó nằm ở `monitoring-core/app/notifier.py` → `event_to_dict()` (tham khảo).
 - Map severity → icon: `critical`🔴 `warning`🟡 `info`🟢.
-- Nhánh git của ông: `tv5-telegram`.
+- Theo điều phối mới: làm trực tiếp trên `main`; trước khi sửa chạy
+  `git checkout main` rồi `git pull origin main`. Không đẩy thay đổi mới lên
+  `tv5-telegram`.
 
 ## 4. Phần đã triển khai trong repo
 
@@ -62,3 +64,5 @@ ghép Telegram dùng một lần; mô tả request/response nằm trong README c
 Các bảng chia sẻ vẫn theo §A, TV5 chỉ tự tạo bảng riêng cho mã ghép và chống gửi
 lặp báo cáo. Kết quả kiểm thử và công thức thống kê được ghi tại
 [`BAO-CAO-TV5.md`](BAO-CAO-TV5.md).
+Kịch bản ghép thử và đánh giá tất cả module nằm tại
+[`KICH-BAN-KIEM-THU-HE-THONG.md`](KICH-BAN-KIEM-THU-HE-THONG.md).

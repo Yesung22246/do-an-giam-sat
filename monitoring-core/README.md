@@ -93,7 +93,7 @@ tests/test_alert_engine.py
 | **TV2 (Backend API)** | Dùng chung 3 bảng trong `models.py` | TV2 tạo/sửa `monitors`, TV1 ghi `check_results` + `incidents` |
 | **TV3 (Frontend)** | Đọc `check_results` (biểu đồ), `incidents` (lịch sử), hàm `compute_uptime` | qua API của TV2 |
 | **TV4 (Hạ tầng)** | Đóng gói service này thành 1 container Docker | `DATABASE_URL` trỏ Postgres chung |
-| **TV5 (Telegram)** | Nhận cảnh báo | JSON từ `notifier.event_to_dict()` — đặt `ALERT_WEBHOOK_URL` trỏ endpoint của TV5 |
+| **TV5 (Telegram)** | Nhận cảnh báo | JSON từ `notifier.event_to_dict()` + header `X-Alert-Secret`; đặt `ALERT_WEBHOOK_URL` và `ALERT_WEBHOOK_SECRET` trùng cấu hình TV5 |
 
 **Định dạng 1 sự kiện cảnh báo** (gửi cho TV5):
 

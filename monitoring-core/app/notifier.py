@@ -60,20 +60,31 @@ class ConsoleNotifier(Notifier):
 class WebhookNotifier(Notifier):
     """Đẩy cảnh báo tới endpoint HTTP của TV5 (Telegram bot)."""
 
-    def __init__(self, url: str) -> None:
+    HEADER_NAME = "X-Alert-Secret"
+
+    def __init__(self, url: str, secret: str, client_factory=None) -> None:
+        if len(secret.strip()) < 32:
+            raise ValueError("ALERT_WEBHOOK_SECRET phải có ít nhất 32 ký tự")
         self.url = url
+        self.secret = secret
+        self._client_factory = client_factory or httpx.AsyncClient
 
     async def send(self, event: AlertEvent) -> None:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.post(self.url, json=event_to_dict(event))
+            async with self._client_factory(timeout=10.0) as client:
+                response = await client.post(
+                    self.url,
+                    json=event_to_dict(event),
+                    headers={self.HEADER_NAME: self.secret},
+                )
+                response.raise_for_status()
         except httpx.HTTPError as exc:
             # Không để lỗi gửi cảnh báo làm chết vòng giám sát.
             print(f"[notifier] Gửi webhook thất bại: {exc}")
 
 
-def build_notifier(webhook_url: str | None) -> Notifier:
+def build_notifier(webhook_url: str | None, webhook_secret: str = "") -> Notifier:
     """Chọn notifier theo cấu hình: có webhook thì đẩy đi, không thì in console."""
     if webhook_url:
-        return WebhookNotifier(webhook_url)
+        return WebhookNotifier(webhook_url, webhook_secret)
     return ConsoleNotifier()

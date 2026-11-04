@@ -16,6 +16,7 @@ class Settings:
     database_url: str = os.getenv(
         "DATABASE_URL", "sqlite+aiosqlite:///./monitoring.db"
     )
+    alert_webhook_secret: str = os.getenv("ALERT_WEBHOOK_SECRET", "").strip()
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     telegram_webhook_url: str = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip()
     telegram_webhook_secret: str = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
@@ -50,6 +51,8 @@ class Settings:
             raise ValueError("REPORT_WEEKLY_DAY phải là mon, tue, wed, thu, fri, sat hoặc sun") from exc
 
     def validate(self) -> None:
+        if self.alert_webhook_secret and len(self.alert_webhook_secret) < 32:
+            raise ValueError("ALERT_WEBHOOK_SECRET phải có ít nhất 32 ký tự")
         if not 1 <= self.link_code_ttl_seconds <= 86400:
             raise ValueError("TELEGRAM_LINK_CODE_TTL_SECONDS phải từ 1 đến 86400")
         if not 0 <= self.daily_report_hour <= 23:

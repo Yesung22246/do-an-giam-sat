@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import httpx
+import pytest
+
 from app.alert_engine import AlertEvent, AlertKind
 from app.checkers.base import CheckOutcome
-from app.notifier import event_to_dict
+from app.notifier import WebhookNotifier, event_to_dict
 
 # Hợp đồng TV5 đang mong đợi (giữ khớp với AlertPayload bên telegram-bot).
 EXPECTED_KEYS = {
@@ -66,3 +69,33 @@ def test_nullable_fields_can_be_none():
     assert d["response_time_ms"] is None
     assert d["status_code"] is None
     assert d["ssl_days_left"] is None
+
+
+@pytest.mark.asyncio
+async def test_webhook_sends_shared_secret_header_and_contract_json():
+    captured = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["secret"] = request.headers.get("X-Alert-Secret")
+        captured["payload"] = request.read().decode("utf-8")
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(handle)
+
+    def client_factory(**kwargs):
+        return httpx.AsyncClient(transport=transport, **kwargs)
+
+    notifier = WebhookNotifier(
+        "http://telegram-bot:8080/alerts",
+        "shared-test-secret-for-tv1-and-tv5",
+        client_factory=client_factory,
+    )
+    await notifier.send(_event(AlertKind.DOWN, CheckOutcome.down("refused")))
+
+    assert captured["secret"] == "shared-test-secret-for-tv1-and-tv5"
+    assert '"kind":"down"' in captured["payload"]
+
+
+def test_webhook_notifier_requires_a_secret():
+    with pytest.raises(ValueError, match="ALERT_WEBHOOK_SECRET"):
+        WebhookNotifier("http://telegram-bot:8080/alerts", "short-secret")

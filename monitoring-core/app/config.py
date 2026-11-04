@@ -21,6 +21,7 @@ class Settings:
         "DATABASE_URL", "sqlite+aiosqlite:///./monitoring.db"
     )
     alert_webhook_url: str = os.getenv("ALERT_WEBHOOK_URL", "").strip()
+    alert_webhook_secret: str = os.getenv("ALERT_WEBHOOK_SECRET", "").strip()
     max_concurrent_checks: int = int(os.getenv("MAX_CONCURRENT_CHECKS", "50"))
     # Khi chạy một mình (dev/SQLite): để True cho tiện, tự tạo bảng.
     # Khi ghép chung với Backend API (TV2) trên Postgres: đặt False để TV2 làm

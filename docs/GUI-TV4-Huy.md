@@ -37,6 +37,8 @@ telegram-bot     8080          phần TV5 — nhận cảnh báo ở POST /alert
   ```
   ALERT_WEBHOOK_URL=http://telegram-bot:8080/alerts
   ```
+- TV1 và TV5 phải có cùng `ALERT_WEBHOOK_SECRET` (ít nhất 32 ký tự). TV1 gửi
+  secret trong header `X-Alert-Secret`; TV5 từ chối webhook thiếu/sai header.
 
 ## 3. Việc của ông cụ thể
 - `docker-compose.yml` gồm 5 service trên + healthcheck.

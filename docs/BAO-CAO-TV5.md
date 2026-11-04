@@ -2,8 +2,8 @@
 
 ## Phạm vi bàn giao
 
-- Endpoint `POST /alerts` nhận đúng JSON §C, tra chủ monitor và gửi cảnh báo tới
-  `notification_channels` loại `telegram`.
+- Endpoint `POST /alerts` nhận đúng JSON §C, yêu cầu header `X-Alert-Secret`,
+  tra chủ monitor và gửi cảnh báo tới `notification_channels` loại `telegram`.
 - Ghép user với chat qua mã một lần, có thời hạn; endpoint tạo mã chỉ nhận lời
   gọi nội bộ có `TELEGRAM_LINK_API_KEY`.
 - Lệnh `/status [giờ]`, `/report daily|weekly`, `/help`, `/stop`.
@@ -42,8 +42,8 @@ Kiểm thử tự động dùng SQLite tạm và Telegram client giả lập. Ch
 HTTP → DB → định tuyến chat và thống kê, nhưng không thay cho kiểm thử với bot
 Telegram thật, Postgres của TV4 hoặc backend TV2 đã triển khai.
 
-**Kết quả chạy:** `telegram-bot/`: 4 passed; `monitoring-core/`: 20 passed.
-Tổng cộng 24 test passed, không có test thất bại.
+Kết quả TV5 được cập nhật cùng với bảng kiểm thử toàn hệ thống tại
+[`KICH-BAN-KIEM-THU-HE-THONG.md`](KICH-BAN-KIEM-THU-HE-THONG.md).
 
 Lệnh chạy tại `telegram-bot/`:
 
@@ -69,6 +69,8 @@ Telegram. Các bước 1–6 là kịch bản tích hợp chờ TV2/TV4 ghép; c
 ## Ghép triển khai
 
 - TV1: `ALERT_WEBHOOK_URL=http://telegram-bot:8080/alerts`.
+- TV1 và TV5 phải cùng cấu hình `ALERT_WEBHOOK_SECRET`; sender đưa giá trị đó vào
+  header `X-Alert-Secret`. Thiếu/sai secret thì bot từ chối webhook.
 - TV2: dùng cùng `DATABASE_URL`, gọi `POST /link-codes` sau xác thực user; gửi
   header `X-Internal-API-Key` và hiển thị mã nhận được cho người dùng.
 - TV4: chạy container `telegram-bot` trên cổng 8080, cấu hình URL HTTPS công khai

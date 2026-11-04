@@ -134,6 +134,11 @@ GET /status/{public_id}               -> trang trạng thái công khai (không 
 **Chủ sở hữu: TV1 (Đức Hoàng) gửi · TV5 (Nguyễn Hoàng) nhận.** TV1 đặt biến `ALERT_WEBHOOK_URL` trỏ tới
 endpoint của TV5. Mỗi khi có cảnh báo, TV1 gửi `POST` JSON sau tới đó:
 
+Để xác thực webhook, TV1 đặt header `X-Alert-Secret` bằng giá trị của
+`ALERT_WEBHOOK_SECRET`. TV1 và TV5 phải cấu hình cùng giá trị secret này qua
+environment; không commit secret thật vào Git. Nếu thiếu/sai header, TV5 trả
+HTTP 401; nếu TV5 chưa cấu hình secret, endpoint trả HTTP 503.
+
 ```json
 {
   "monitor_id": 1,
@@ -176,14 +181,17 @@ telegram-bot     8080          phần TV5, nhận cảnh báo ở POST /alerts
 - Chuỗi kết nối DB chung (tất cả service dùng y hệt):
   `DATABASE_URL=postgresql+asyncpg://app:<mật khẩu>@db:5432/monitoring`
 - TV1 đặt thêm: `ALERT_WEBHOOK_URL=http://telegram-bot:8080/alerts`
+- TV1 và TV5 cùng đặt: `ALERT_WEBHOOK_SECRET=<cùng một secret ngẫu nhiên>`
 - TV4 lo reverse proxy (Nginx/Traefik) + HTTPS cho `backend-api` và `frontend`.
 
 ---
 
 ## §E. Quy tắc làm việc chung (để khỏi giẫm chân, không cần họp)
 
-1. **Một repo chung, mỗi người một nhánh**: `tv1-core`, `tv2-api`, `tv3-frontend`,
-   `tv4-infra`, `tv5-telegram`. Xong việc nào mở Pull Request vào `main`.
+1. **Một repo chung.** TV1–TV4 dùng nhánh riêng (`tv1-core`, `tv2-api`,
+   `tv3-frontend`, `tv4-infra`) rồi mở Pull Request vào `main`. Theo điều phối mới,
+   TV5 làm trực tiếp trên `main`: trước khi sửa chạy `git checkout main` rồi
+   `git pull origin main`; không đẩy thay đổi mới lên `tv5-telegram`.
 2. **Không tự đổi mục 🔒**. Cần đổi → nhắn nhóm + sửa tài liệu này trước, rồi mới code.
 3. **Thứ tự phụ thuộc** (ai chờ ai):
    - TV2 chốt bảng §A trước → TV1, TV3, TV5 mới chạy mượt.

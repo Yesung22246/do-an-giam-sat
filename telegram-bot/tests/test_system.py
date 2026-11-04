@@ -37,7 +37,11 @@ class FakeTelegram:
 
 
 @asynccontextmanager
-async def app_client(tmp_path: Path):
+async def app_client(
+    tmp_path: Path,
+    *,
+    alert_webhook_secret: str = "shared-test-secret-for-tv1-and-tv5",
+):
     url = f"sqlite+aiosqlite:///{tmp_path / 'tv5-test.db'}"
     schema_engine = create_async_engine(url)
     async with schema_engine.begin() as connection:
@@ -47,6 +51,7 @@ async def app_client(tmp_path: Path):
 
     config = Settings(
         database_url=url,
+        alert_webhook_secret=alert_webhook_secret,
         telegram_bot_token="test-token",
         telegram_webhook_url="",
         telegram_webhook_secret="test-webhook-secret",
@@ -118,6 +123,7 @@ async def test_tv1_alert_contract_routes_to_owner_and_formats_event(tmp_path):
         await add_user_monitor(app)
         response = await client.post(
             "/alerts",
+            headers={"X-Alert-Secret": "shared-test-secret-for-tv1-and-tv5"},
             json={
                 "monitor_id": 101,
                 "monitor_name": "Shop API",
@@ -187,8 +193,46 @@ async def test_webhook_secret_and_payload_validation(tmp_path):
             json={"message": {"chat": {"id": 4}, "text": "/help"}},
         )
         assert denied.status_code == 401
-        invalid_alert = await client.post("/alerts", json={"monitor_id": -1})
+        alert_payload = {
+            "monitor_id": 101,
+            "monitor_name": "Shop API",
+            "kind": "down",
+            "severity": "critical",
+            "message": "service down",
+            "at": "2026-10-20T01:03:00+00:00",
+        }
+        missing_alert_secret = await client.post("/alerts", json=alert_payload)
+        assert missing_alert_secret.status_code == 401
+        wrong_alert_secret = await client.post(
+            "/alerts",
+            headers={"X-Alert-Secret": "wrong"},
+            json=alert_payload,
+        )
+        assert wrong_alert_secret.status_code == 401
+        invalid_alert = await client.post(
+            "/alerts",
+            headers={"X-Alert-Secret": "shared-test-secret-for-tv1-and-tv5"},
+            json={"monitor_id": -1},
+        )
         assert invalid_alert.status_code == 422
+        assert telegram.messages == []
+
+
+@pytest.mark.asyncio
+async def test_alert_route_fails_closed_when_server_secret_is_unconfigured(tmp_path):
+    async with app_client(tmp_path, alert_webhook_secret="") as (_, client, telegram):
+        response = await client.post(
+            "/alerts",
+            json={
+                "monitor_id": 101,
+                "monitor_name": "Shop API",
+                "kind": "down",
+                "severity": "critical",
+                "message": "service down",
+                "at": "2026-10-20T01:03:00+00:00",
+            },
+        )
+        assert response.status_code == 503
         assert telegram.messages == []
 
 
